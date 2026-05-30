@@ -10,8 +10,6 @@ const nextConfig = {
       { protocol: "https", hostname: "*.notion.so" },
     ],
   },
-  // Required for Vercel deployment
-  output: "standalone",
 };
 
 module.exports = nextConfig;
