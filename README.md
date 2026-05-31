@@ -111,7 +111,7 @@ Notion/Drive → Raw Documents → Chunker → Voyage AI Embeddings → Pinecone
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/company-brain-os.git
+git clone https://github.com/ayushigithub12/company-brain-os.git
 cd company-brain-os
 ```
 
@@ -286,4 +286,4 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 ---
 
-Built with ❤️ by [Ayushi Sharma](https://github.com/YOUR_GITHUB_USERNAME)
+Built with ❤️ by [Ayushi Sharma](https://github.com/ayushigithub12)
