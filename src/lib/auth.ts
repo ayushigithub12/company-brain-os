@@ -1,3 +1,4 @@
+process.env.NEXTAUTH_URL = process.env.NEXTAUTH_URL || "https://project-9d32l-q7ai3sbjh-ayushigithub12s-projects.vercel.app";
 // src/lib/auth.ts
 import { NextAuthOptions } from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
