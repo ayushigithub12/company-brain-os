@@ -1,9 +1,12 @@
-process.env.NEXTAUTH_URL = process.env.NEXTAUTH_URL || "https://project-9d32l-q7ai3sbjh-ayushigithub12s-projects.vercel.app";
-// src/lib/auth.ts
+process.env.NEXTAUTH_URL = process.env.NEXTAUTH_URL || "https://company-brain-os.vercel.app";
+
 import { NextAuthOptions } from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
+import { PrismaAdapter } from "@auth/prisma-adapter";
+import { prisma } from "@/lib/db/prisma";
 
 export const authOptions: NextAuthOptions = {
+  adapter: PrismaAdapter(prisma),
   providers: [
     GoogleProvider({
       clientId: process.env.GOOGLE_CLIENT_ID ?? "",
