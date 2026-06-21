@@ -2,7 +2,6 @@
 // Central type definitions — aligned with prisma/schema.prisma
 
 export type {
-    MemberRole,
     ConnectorType,
     ConnectorStatus,
     DocumentStatus,
