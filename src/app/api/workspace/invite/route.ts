@@ -1,11 +1,11 @@
 // @ts-nocheck
 // src/app/api/workspace/invite/route.ts
+// Invite someone — max 5 invites per user
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db/prisma";
-import { getInvitableRoles, can } from "@/lib/permissions";
 
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -14,90 +14,110 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const { workspaceId, email, role } = await req.json();
+    const { email, workspaceId } = await req.json();
 
-    if (!workspaceId || !email || !role) {
-      return NextResponse.json({ success: false, error: "workspaceId, email, and role required" }, { status: 400 });
+    if (!email || !workspaceId) {
+      return NextResponse.json({ success: false, error: "email and workspaceId required" }, { status: 400 });
     }
 
-    // Get inviter's role in this workspace
-    const inviterMember = await prisma.workspaceMember.findUnique({
-      where: { workspaceId_userId: { workspaceId, userId: session.user.id } },
+    // Verify inviter owns this workspace
+    const workspace = await prisma.workspace.findFirst({
+      where: { id: workspaceId, ownerId: session.user.id },
     });
 
-    if (!inviterMember || !can.inviteUsers(inviterMember.role)) {
-      return NextResponse.json({ success: false, error: "You don't have permission to invite users" }, { status: 403 });
+    if (!workspace) {
+      return NextResponse.json({ success: false, error: "Workspace not found" }, { status: 404 });
     }
 
-    // Validate role is allowed for this inviter
-    const invitableRoles = getInvitableRoles(inviterMember.role);
-    if (!invitableRoles.includes(role)) {
+    // Check invite limit — max 5
+    const inviteCount = await prisma.invite.count({
+      where: { inviterId: session.user.id },
+    });
+
+    if (inviteCount >= 5) {
       return NextResponse.json({
         success: false,
-        error: `As ${inviterMember.role}, you can only invite: ${invitableRoles.join(", ")}`,
+        error: "You have reached the maximum of 5 invites",
       }, { status: 403 });
     }
 
-    // Find invited user
-    const invitedUser = await prisma.user.findUnique({
+    // Find invitee
+    const invitee = await prisma.user.findUnique({
       where: { email: email.toLowerCase().trim() },
     });
 
-    if (!invitedUser) {
+    if (!invitee) {
       return NextResponse.json({
         success: false,
         error: "No account found with that email. They must sign into Company Brain OS first.",
       }, { status: 404 });
     }
 
-    // Add or update workspace membership
-    const existing = await prisma.workspaceMember.findUnique({
-      where: { workspaceId_userId: { workspaceId, userId: invitedUser.id } },
+    if (invitee.id === session.user.id) {
+      return NextResponse.json({ success: false, error: "You cannot invite yourself" }, { status: 400 });
+    }
+
+    // Check if already invited
+    const existing = await prisma.invite.findUnique({
+      where: { inviterId_inviteeId: { inviterId: session.user.id, inviteeId: invitee.id } },
     });
 
     if (existing) {
-      await prisma.workspaceMember.update({
-        where: { id: existing.id },
-        data: { role },
-      });
-    } else {
-      await prisma.workspaceMember.create({
-        data: { workspaceId, userId: invitedUser.id, role },
-      });
+      return NextResponse.json({ success: false, error: "Already invited this person" }, { status: 409 });
     }
 
-    // Record the invitation relationship
-    await prisma.invitationRecord.upsert({
-      where: {
-        workspaceId_inviterId_inviteeId: {
-          workspaceId,
-          inviterId: session.user.id,
-          inviteeId: invitedUser.id,
-        },
-      },
-      create: {
-        workspaceId,
+    // Create invite
+    const invite = await prisma.invite.create({
+      data: {
         inviterId: session.user.id,
-        inviteeId: invitedUser.id,
-        role,
+        inviteeId: invitee.id,
+        workspaceId,
+        seen: false,
       },
-      update: { role },
-    });
-
-    const member = await prisma.workspaceMember.findUnique({
-      where: { workspaceId_userId: { workspaceId, userId: invitedUser.id } },
-      include: { user: { select: { id: true, name: true, email: true, image: true } } },
+      include: {
+        invitee: { select: { name: true, email: true, image: true } },
+      },
     });
 
     return NextResponse.json({
       success: true,
       data: {
-        member: { id: member?.id, role: member?.role, user: member?.user },
-        message: `${invitedUser.name ?? email} invited as ${role}`,
+        invite: {
+          id: invite.id,
+          invitee: invite.invitee,
+          createdAt: invite.createdAt,
+        },
+        remainingInvites: 5 - (inviteCount + 1),
       },
     });
   } catch (err) {
     console.error("[Invite]", err);
-    return NextResponse.json({ success: false, error: "Failed to invite member" }, { status: 500 });
+    return NextResponse.json({ success: false, error: "Failed to invite" }, { status: 500 });
+  }
+}
+
+export async function DELETE(req: NextRequest) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) {
+    return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
+  }
+
+  try {
+    const { inviteId } = await req.json();
+
+    const invite = await prisma.invite.findUnique({
+      where: { id: inviteId },
+    });
+
+    if (!invite || invite.inviterId !== session.user.id) {
+      return NextResponse.json({ success: false, error: "Invite not found" }, { status: 404 });
+    }
+
+    await prisma.invite.delete({ where: { id: inviteId } });
+
+    return NextResponse.json({ success: true, data: { removed: true } });
+  } catch (err) {
+    console.error("[Remove Invite]", err);
+    return NextResponse.json({ success: false, error: "Failed to remove invite" }, { status: 500 });
   }
 }

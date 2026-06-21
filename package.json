@@ -14,7 +14,7 @@
     },
     "dependencies": {
         "@anthropic-ai/sdk": "^0.39.0",
-        "@auth/prisma-adapter": "^2.7.2",
+        "@auth/prisma-adapter": "^2.11.2",
         "@google-cloud/storage": "^7.14.0",
         "@notionhq/client": "^2.2.15",
         "@pinecone-database/pinecone": "^3.0.3",

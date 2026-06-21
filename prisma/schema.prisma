@@ -8,11 +8,61 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
-enum MemberRole {
-  ADMIN
-  OWNER
-  MEMBER
-  VIEWER
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+
+  workspaces    Workspace[]
+  sentInvites   Invite[]    @relation("SentInvites")
+  receivedInvites Invite[]  @relation("ReceivedInvites")
+  verifiedCards ProcessCard[] @relation("VerifiedCards")
+  queryLogs     QueryLog[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Workspace {
+  id          String  @id @default(cuid())
+  name        String
+  slug        String  @unique
+  ownerId     String
+
+  owner      User           @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  connectors Connector[]
+  documents  SourceDocument[]
+  chunks     DocumentChunk[]
+  cards      ProcessCard[]
+  queryLogs  QueryLog[]
+  sentInvites Invite[]      @relation("WorkspaceInvites")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([ownerId])
+}
+
+// Tracks who invited whom and which workspace they share access to
+model Invite {
+  id            String   @id @default(cuid())
+  inviterId     String
+  inviteeId     String
+  workspaceId   String   // inviter's workspace the invitee gets access to
+  
+  seen          Boolean  @default(false) // for in-app notification
+  
+  inviter    User      @relation("SentInvites",     fields: [inviterId],   references: [id], onDelete: Cascade)
+  invitee    User      @relation("ReceivedInvites",  fields: [inviteeId],   references: [id], onDelete: Cascade)
+  workspace  Workspace @relation("WorkspaceInvites", fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([inviterId, inviteeId])
+  @@index([inviteeId])
+  @@index([workspaceId])
 }
 
 enum ConnectorType {
@@ -43,110 +93,6 @@ enum CardStatus {
   ARCHIVED
 }
 
-model User {
-  id            String    @id @default(cuid())
-  name          String?
-  email         String?   @unique
-  emailVerified DateTime?
-  image         String?
-
-  accounts      Account[]
-  sessions      Session[]
-  memberships   WorkspaceMember[]
-  verifiedCards ProcessCard[] @relation("VerifiedCards")
-  queryLogs     QueryLog[]
-  sentInvitations     InvitationRecord[] @relation("SentInvitations")
-  receivedInvitations InvitationRecord[] @relation("ReceivedInvitations")
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-model Account {
-  id                String  @id @default(cuid())
-  userId            String
-  type              String
-  provider          String
-  providerAccountId String
-  refresh_token     String? @db.Text
-  access_token      String? @db.Text
-  expires_at        Int?
-  token_type        String?
-  scope             String?
-  id_token          String? @db.Text
-  session_state     String?
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([provider, providerAccountId])
-}
-
-model Session {
-  id           String   @id @default(cuid())
-  sessionToken String   @unique
-  userId       String
-  expires      DateTime
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-}
-
-model VerificationToken {
-  identifier String
-  token      String   @unique
-  expires    DateTime
-
-  @@unique([identifier, token])
-}
-
-model Workspace {
-  id          String  @id @default(cuid())
-  name        String
-  slug        String  @unique
-  description String?
-
-  members    WorkspaceMember[]
-  connectors Connector[]
-  documents  SourceDocument[]
-  chunks     DocumentChunk[]
-  cards      ProcessCard[]
-  queryLogs  QueryLog[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-model WorkspaceMember {
-  id          String     @id @default(cuid())
-  workspaceId String
-  userId      String
-  role        MemberRole @default(OWNER)
-
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@unique([workspaceId, userId])
-}
-
-model InvitationRecord {
-  id          String   @id @default(cuid())
-  workspaceId String
-  inviterId   String
-  inviteeId   String
-  role        String
-
-  inviter User @relation("SentInvitations",    fields: [inviterId], references: [id], onDelete: Cascade)
-  invitee User @relation("ReceivedInvitations", fields: [inviteeId], references: [id], onDelete: Cascade)
-
-  createdAt DateTime @default(now())
-
-  @@unique([workspaceId, inviterId, inviteeId])
-  @@index([workspaceId])
-  @@index([inviteeId])
-}
-
 model Connector {
   id          String          @id @default(cuid())
   workspaceId String
@@ -165,14 +111,13 @@ model Connector {
   lastSyncError String?  @db.Text
   syncCount     Int      @default(0)
 
-  workspace Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   documents SourceDocument[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([workspaceId])
-  @@index([type])
 }
 
 model SourceDocument {
@@ -188,22 +133,20 @@ model SourceDocument {
   content  String @db.Text
   metadata Json?
 
-  status        DocumentStatus @default(PENDING)
-  lastIndexedAt DateTime?
+  status          DocumentStatus @default(PENDING)
+  lastIndexedAt   DateTime?
   sourceUpdatedAt DateTime?
 
-  workspace Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  connector Connector?      @relation(fields: [connectorId], references: [id], onDelete: SetNull)
-  chunks    DocumentChunk[]
-
-  processCards ProcessCard[] @relation("ProcessCardSources")
+  workspace    Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  connector    Connector?      @relation(fields: [connectorId], references: [id], onDelete: SetNull)
+  chunks       DocumentChunk[]
+  processCards ProcessCard[]   @relation("ProcessCardSources")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([workspaceId, sourceType, sourceId])
   @@index([workspaceId])
-  @@index([sourceType])
 }
 
 model DocumentChunk {
@@ -216,8 +159,7 @@ model DocumentChunk {
   tokenCount Int?
   heading    String?
   metadata   Json?
-
-  vectorId String? @unique
+  vectorId   String? @unique
 
   workspace Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   document  SourceDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
@@ -237,22 +179,19 @@ model ProcessCard {
   name        String
   description String? @db.Text
   trigger     String? @db.Text
+  steps       Json
+  exceptions  Json?
+  owners      String[] @default([])
+  tags        String[] @default([])
 
-  steps      Json
-  exceptions Json?
-  owners     String[] @default([])
-  tags       String[] @default([])
-
-  confidence Float      @default(0)
-  status     CardStatus @default(DRAFT)
-
+  confidence   Float      @default(0)
+  status       CardStatus @default(DRAFT)
   verifiedAt   DateTime?
   verifiedById String?
 
-  workspace  Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  verifiedBy User?     @relation("VerifiedCards", fields: [verifiedById], references: [id], onDelete: SetNull)
-
-  sources SourceDocument[] @relation("ProcessCardSources")
+  workspace  Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  verifiedBy User?          @relation("VerifiedCards", fields: [verifiedById], references: [id], onDelete: SetNull)
+  sources    SourceDocument[] @relation("ProcessCardSources")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -266,12 +205,11 @@ model QueryLog {
   workspaceId String
   userId      String?
 
-  query      String @db.Text
+  query      String  @db.Text
   answer     String? @db.Text
   confidence Float?
   answered   Boolean @default(false)
-
-  sources Json?
+  sources    Json?
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   user      User?     @relation(fields: [userId], references: [id], onDelete: SetNull)

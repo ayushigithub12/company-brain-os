@@ -1,5 +1,5 @@
 // @ts-nocheck
-// src/lib/rag/query.ts — RAG query engine using Groq (free, no billing needed)
+// src/lib/rag/query.ts — searches own workspace + all invited workspaces
 
 import { prisma } from "@/lib/db/prisma";
 import { getEmbedder } from "@/lib/rag/embeddings";
@@ -7,26 +7,18 @@ import { searchVectors } from "@/lib/rag/vectorstore";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 
-const SYSTEM_PROMPT = `You are Company Brain — an AI assistant that answers questions about how this specific company operates.
-
-You are given retrieved excerpts from the company's internal documents. Your job is to:
-1. Answer the question using ONLY the provided context
-2. Reference document titles when citing information
-3. If the context doesn't contain the answer, say clearly: "I don't have documented information about this."
-4. Never make up company-specific facts
-
-Be direct, factual, and concise. End with: Sources: [Document Name]`;
+const SYSTEM_PROMPT = `You are Company Brain — an AI assistant that answers questions about how this company operates.
+Answer using ONLY the provided context. Reference document titles when citing.
+If context doesn't contain the answer say: "I don't have documented information about this."
+Never make up facts. Be direct and concise. End with: Sources: [Document Name]`;
 
 async function callGroq(prompt: string): Promise<string> {
   const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey) throw new Error("GROQ_API_KEY not set in .env");
+  if (!apiKey) throw new Error("GROQ_API_KEY not set");
 
   const response = await fetch(GROQ_API_URL, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${apiKey}`,
-    },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({
       model: "llama-3.1-8b-instant",
       messages: [
@@ -38,11 +30,7 @@ async function callGroq(prompt: string): Promise<string> {
     }),
   });
 
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Groq API error: ${error}`);
-  }
-
+  if (!response.ok) throw new Error(`Groq API error: ${await response.text()}`);
   const data = await response.json();
   return data.choices?.[0]?.message?.content ?? "Unable to generate answer.";
 }
@@ -50,17 +38,31 @@ async function callGroq(prompt: string): Promise<string> {
 export async function queryBrain(request: any, userId?: string): Promise<any> {
   const { query, workspaceId, topK = 8 } = request;
 
-  // 1. Embed the query
+  // Get all workspace IDs this user has access to (own + invited)
+  const invites = userId ? await prisma.invite.findMany({
+    where: { inviteeId: userId },
+    select: { workspaceId: true },
+  }) : [];
+
+  const allWorkspaceIds = [workspaceId, ...invites.map((i: any) => i.workspaceId)];
+
+  // Embed query
   const embedder = getEmbedder();
   const queryEmbedding = await embedder.embedQuery(query);
 
-  // 2. Retrieve chunks from Pinecone
-  const vectorResults = await searchVectors(queryEmbedding, workspaceId, { topK });
+  // Search across ALL accessible workspaces
+  const perWorkspace = Math.max(3, Math.ceil(topK / allWorkspaceIds.length));
+  const allResults = await Promise.all(
+    allWorkspaceIds.map(wsId => searchVectors(queryEmbedding, wsId, { topK: perWorkspace }))
+  );
 
-  // 3. Build source objects
-  const sources = vectorResults
-    .filter((r) => r.score > 0.3)
-    .map((r) => ({
+  // Merge and sort by score
+  const sources = allResults
+    .flat()
+    .sort((a: any, b: any) => b.score - a.score)
+    .slice(0, topK)
+    .filter((r: any) => r.score > 0.3)
+    .map((r: any) => ({
       chunkId: r.metadata.chunkId,
       documentId: r.metadata.documentId,
       documentTitle: r.metadata.title,
@@ -73,31 +75,21 @@ export async function queryBrain(request: any, userId?: string): Promise<any> {
 
   const answered = sources.length > 0;
 
-  // 4. Build context
-  let contextBlock = answered
-    ? sources.map((s, i) => {
-        const heading = s.heading ? ` › ${s.heading}` : "";
-        return `[Source ${i + 1}: ${s.documentTitle}${heading}]\n${s.content}`;
-      }).join("\n\n---\n\n")
-    : "No relevant documents found in the company knowledge base.";
+  const contextBlock = answered
+    ? sources.map((s: any, i: number) =>
+        `[Source ${i + 1}: ${s.documentTitle}${s.heading ? ` › ${s.heading}` : ""}]\n${s.content}`
+      ).join("\n\n---\n\n")
+    : "No relevant documents found.";
 
-  const prompt = `Question: ${query}
+  const answer = await callGroq(
+    `Question: ${query}\n\nRetrieved knowledge:\n${contextBlock}\n\nAnswer based only on the context above.`
+  );
 
-Retrieved company knowledge:
-${contextBlock}
-
-Answer based only on the context above.`;
-
-  // 5. Call Groq
-  const answer = await callGroq(prompt);
-
-  // 6. Confidence score
   const avgScore = sources.length > 0
-    ? sources.reduce((sum, s) => sum + s.score, 0) / sources.length
+    ? sources.reduce((sum: number, s: any) => sum + s.score, 0) / sources.length
     : 0;
   const confidence = answered ? Math.min(avgScore * 1.2, 0.99) : 0.05;
 
-  // 7. Log query
   const queryLog = await prisma.queryLog.create({
     data: {
       workspaceId,
@@ -106,7 +98,7 @@ Answer based only on the context above.`;
       answer,
       confidence,
       answered,
-      sources: sources.map((s) => ({
+      sources: sources.map((s: any) => ({
         documentId: s.documentId,
         title: s.documentTitle,
         score: s.score,
@@ -125,5 +117,5 @@ export async function getGapSignals(workspaceId: string, limit = 20) {
     orderBy: { _count: { query: "desc" } },
     take: limit,
   });
-  return gaps.map((g) => ({ query: g.query, count: g._count.query }));
+  return gaps.map((g: any) => ({ query: g.query, count: g._count.query }));
 }
