@@ -24,12 +24,13 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { workspaceId, connectorId, autoExtract } = SyncSchema.parse(body);
 
-    // Role check — only OWNER and ADMIN can sync
-    const member = await prisma.workspaceMember.findUnique({
-      where: { workspaceId_userId: { workspaceId, userId: session.user.id } },
+    // Check user owns this workspace
+    const user = await prisma.user.findUnique({ where: { email: session.user.email! } });
+    const workspace = await prisma.workspace.findFirst({
+      where: { id: workspaceId, ownerId: user?.id },
     });
-    if (!member || !["OWNER", "ADMIN"].includes(member.role)) {
-      return NextResponse.json({ success: false, error: "Only owners and admins can sync" }, { status: 403 });
+    if (!workspace) {
+      return NextResponse.json({ success: false, error: "Workspace not found" }, { status: 403 });
     }
 
     const connector = await prisma.connector.findFirst({
